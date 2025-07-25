@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  streamlit_app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8501:8501"
+    command: streamlit run app.py
+    depends_on:
+      - qdrant
+      # - llm-service
+    environment:
+      - LLMDEPLOY_API_KEY=${OPENAI_API_KEY}
+      - LLMDEPLOY_BASE_URL=http://llm-service:8000/v1
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  qdrant:
+    image: qdrant/qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage:z
+
+
+volumes:
+  qdrant_storage:
+
+networks:
+  default:
+    driver: bridge
