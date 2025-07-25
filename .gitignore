@@ -1,0 +1,96 @@
+# === Python & Streamlit ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.DS_Store
+
+# === Jupyter Notebooks ===
+.ipynb_checkpoints/
+
+# === VSCode/IDE ===
+.vscode/
+.idea/
+*.swp
+
+# === OS Files ===
+Thumbs.db
+.DS_Store
+
+# === Model & Data Cache ===
+.cache/
+.cache/*
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.h5
+*.onnx
+*.npz
+*.npy
+*.joblib
+*.pkl
+
+# === HuggingFace/Transformers Cache ===
+/app/.cache/
+/app/.cache/*
+~/.cache/
+~/.cache/*
+
+# === Streamlit Cache ===
+.streamlit/
+
+# === API Keys, Secrets, Settings ===
+.env
+.env.*
+*.env
+settings.py
+settings_local.py
+config.py
+config_local.py
+secrets.json
+*.secret*
+*api_key*
+*apikey*
+*API_KEY*
+*APIKEY*
+
+# === Docker ===
+*.log
+*.pid
+
+# === Finetuning & Sensitive Data ===
+finetuning/
+/finetuning/
+*/finetuning/
+
+# === Test & Temp Files ===
+*.tmp
+*.bak
+*.old
+*.orig
+*.test
+*.out
+*.log
+
+# === Ignore medical/others/memory bytecode ===
+medical/__pycache__/
+others/__pycache__/
+memory/__pycache__/
+
+# === Ignore large data ===
+data/
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.jsonl
+*.parquet
+
+# === Ignore user uploads ===
+uploads/
+
+# === Ignore Qdrant storage (if local) ===
+qdrant_storage/ 
