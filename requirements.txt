@@ -26,3 +26,14 @@ streamlit
 openai
 wandb
 pypdf
+# Additional dependencies from /others folder
+tqdm
+requests
+typing-extensions
+openai
+peft
+redis
+fuzzywuzzy
+numpy
+langdetect
+sentence_transformers

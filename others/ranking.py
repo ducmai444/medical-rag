@@ -65,7 +65,7 @@ def calculate_rerank_scores(query_embedding, relation_embeddings, rerank_relatio
             scores.append((i, score))
     return scores
 
-def MMR_reranking(query, relations, top_k=10):
+def MMR_ranking(query, relations, top_k=10):
     rels = []
     relation_texts = [query] + [f"{rel.get('relatedFromIdName', '')} {rel.get('additionalRelationLabel', '').replace('_', ' ')} {rel.get('relatedIdName', '')}" for rel in relations]
     embeddings = umlsbert.batch_encode(relation_texts)

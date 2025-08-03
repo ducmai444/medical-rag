@@ -197,17 +197,10 @@ MEDICAL_TERMS = {
   "hemophagocytic lymphohistiocytosis": ("C0027653", "Hemophagocytic Lymphohistiocytosis", "An aggressive immune activation syndrome causing fever and cytopenias."),
 }
 
-MEDICAL_TERMS = {
-  # Drugs (generic and brand)
-  "amoxicillin": ("C0002637", "Amoxicillin", "A broad-spectrum penicillin antibiotic used to treat various infections."),
-  "ceftaroline": ("C0564627", "Ceftaroline", "A cephalosporin antibiotic effective against MRSA, used for skin and respiratory infections:contentReference[oaicite:8]{index=8}."),
-}
-
 class MedicalNERLLM:
     def __init__(self, model_name: str = "blaze999/Medical-NER", device: str = None):
         self.model_name = model_name
-        if device is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         self.device = device
 
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)

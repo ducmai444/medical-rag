@@ -2,12 +2,12 @@ import pandas as pd
 from evaluation import evaluate_llm
 from llm_components.prompt_templates import InferenceTemplate
 from monitoring import PromptMonitoringManager
-# from qwak_inference import RealTimeClient
 from rag.retriever import VectorRetriever
 from settings import settings
 from typing import Optional, Dict
 import uuid
 import logging
+import time
 
 from openai import OpenAI
 
@@ -329,7 +329,7 @@ LLMRag = LLM_RAG  # Để tương thích với code cũ
 
 # Medical imports
 try:
-    from medical import MedicalRAGPipeline, MedicalContext
+    from others.medical_pipeline import MedicalRAGPipeline, MedicalContext
     MEDICAL_PIPELINE_AVAILABLE = True
 except ImportError as e:
     logger.warning(f"Medical pipeline not available: {e}")
@@ -343,12 +343,19 @@ class MedicalLLM_RAG:
     medical NER, UMLS knowledge, and standard RAG retrieval.
     """
     
-    def __init__(self, umls_api_key: str = None):
+    def __init__(self, 
+                 umls_api_key: str = None, 
+                 enable_translation: bool = True,
+                 enable_caching: bool = False,
+                 max_workers: int = 4):
         """
         Initialize Medical RAG pipeline.
         
         Args:
             umls_api_key: API key for UMLS access
+            enable_translation: Enable Vietnamese translation
+            enable_caching: Enable Redis caching
+            max_workers: Max workers for parallel processing
         """
         # Initialize standard RAG pipeline
         self.rag_pipeline = LLM_RAG()
@@ -359,7 +366,9 @@ class MedicalLLM_RAG:
             try:
                 self.medical_pipeline = MedicalRAGPipeline(
                     umls_api_key=umls_api_key,
-                    max_umls_results=3
+                    enable_translation=enable_translation,
+                    enable_caching=enable_caching,
+                    max_workers=max_workers
                 )
                 logger.info("✅ Medical RAG pipeline initialized successfully")
             except Exception as e:
@@ -375,6 +384,8 @@ class MedicalLLM_RAG:
                  enable_rag: bool = True,
                  enable_medical: bool = True,
                  medical_priority_weight: float = 0.7,
+                 enable_evaluation: bool = False,
+                 enable_monitoring: bool = True,
                  **kwargs) -> dict:
         """
         Generate response using medical-enhanced RAG.
@@ -384,6 +395,8 @@ class MedicalLLM_RAG:
             enable_rag: Enable standard RAG retrieval
             enable_medical: Enable medical knowledge retrieval
             medical_priority_weight: Weight for medical context vs document context
+            enable_evaluation: Enable evaluation
+            enable_monitoring: Enable monitoring
             **kwargs: Additional arguments for RAG pipeline
             
         Returns:
@@ -392,9 +405,10 @@ class MedicalLLM_RAG:
         start_time = time.time()
         
         try:
-            # Step 1: Check if query is medical-related
+            # Step 1: Check if query is medical-related and process medical context
             is_medical_query = False
             medical_context = None
+            query_for_rag = query
             
             if enable_medical and self.medical_enabled:
                 is_medical_query = self.medical_pipeline.is_medical_query(query)
@@ -407,89 +421,126 @@ class MedicalLLM_RAG:
                     if medical_context.translated_query != medical_context.original_query:
                         query_for_rag = medical_context.translated_query
                         logger.info(f"Using translated query for RAG: {query_for_rag}")
-                    else:
-                        query_for_rag = query
-                else:
-                    query_for_rag = query
-            else:
-                query_for_rag = query
             
             # Step 2: Standard RAG retrieval
+            rag_context = ""
             rag_result = None
             if enable_rag:
-                rag_result = self.rag_pipeline.generate(
-                    query=query_for_rag,
-                    enable_rag=True,
-                    **kwargs
-                )
+                try:
+                    retriever = VectorRetriever(query=query_for_rag)
+                    hits = retriever.retrieve_top_k(
+                        k=settings.TOP_K, to_expand_to_n_queries=settings.EXPAND_N_QUERY
+                    )
+                    rag_context = retriever.rerank(hits=hits, keep_top_k=settings.KEEP_TOP_K)
+                except Exception as e:
+                    logger.warning(f"RAG retrieval failed: {e}")
+                    rag_context = ""
             
             # Step 3: Merge medical context with RAG context
             final_context = self._merge_contexts(
-                original_query=query,
-                rag_result=rag_result,
                 medical_context=medical_context,
+                rag_context=rag_context,
                 medical_weight=medical_priority_weight
             )
             
-            # Step 4: Generate final response
-            if medical_context and medical_context.umls_results:
-                # Medical-enhanced response
-                enhanced_query = self._create_enhanced_query(
-                    original_query=query,
-                    rag_context=rag_result.get('context', '') if rag_result else '',
-                    medical_context=medical_context
-                )
-                
-                # Generate response with enhanced context
-                final_result = self.rag_pipeline._generate_llm_response(
-                    query=enhanced_query,
-                    context=final_context,
-                    **kwargs
-                )
-            else:
-                # Standard RAG response
-                final_result = rag_result if rag_result else {
-                    'answer': 'I apologize, but I could not find relevant information to answer your question.',
-                    'context': '',
-                    'metadata': {}
-                }
+            # Step 4: Generate final response using LLM
+            final_prompt = self._create_enhanced_prompt(
+                original_query=query,
+                context=final_context,
+                medical_context=medical_context
+            )
             
-            # Step 5: Add medical metadata
+            # Generate LLM response
+            response = self.rag_pipeline.llm_client.chat.completions.create(
+                model="o4-mini-2025-04-16",
+                messages=[
+                    {"role": "system", "content": "You are a helpful medical assistant. Provide accurate and comprehensive answers based on the provided context."},
+                    {"role": "user", "content": final_prompt},
+                ]
+            )
+            answer = response.choices[0].message.content
+            
+            # Step 5: Prepare result with medical metadata
+            result = {
+                "answer": answer,
+                "is_medical_query": is_medical_query,
+                "pipeline_type": "medical_rag" if is_medical_query else "standard_rag",
+                "processing_time": time.time() - start_time,
+                "context": final_context
+            }
+            
+            # Add medical metadata if available
             if medical_context:
-                final_result['medical_metadata'] = self.medical_pipeline.get_medical_metadata(medical_context)
-                final_result['is_medical_query'] = is_medical_query
-                final_result['medical_confidence'] = medical_context.confidence_score
+                result["medical_metadata"] = self.medical_pipeline.get_medical_metadata(medical_context)
+                result["medical_confidence"] = medical_context.confidence_score
+                result["translation_used"] = medical_context.original_query != medical_context.translated_query
             
-            final_result['processing_time'] = time.time() - start_time
-            final_result['pipeline_type'] = 'medical_rag' if is_medical_query else 'standard_rag'
+            # Handle evaluation and monitoring
+            if enable_evaluation:
+                try:
+                    evaluation_result = evaluate_llm(query=query, output=answer)
+                    result["llm_evaluation_result"] = evaluation_result
+                except Exception as e:
+                    logger.warning(f"Evaluation failed: {e}")
+                    result["llm_evaluation_result"] = None
             
-            return final_result
+            if enable_monitoring:
+                try:
+                    metadata = {"medical_enhanced": is_medical_query}
+                    if result.get("llm_evaluation_result"):
+                        metadata["llm_evaluation_result"] = result["llm_evaluation_result"]
+                    
+                    self.rag_pipeline.prompt_monitoring_manager.log(
+                        prompt=final_prompt,
+                        prompt_template="medical_enhanced_template",
+                        prompt_template_variables={"query": query, "context": final_context},
+                        output=answer,
+                        metadata=metadata
+                    )
+                    self.rag_pipeline.prompt_monitoring_manager.log_chain(
+                        query=query, 
+                        response=answer, 
+                        eval_output=result.get("llm_evaluation_result")
+                    )
+                except Exception as e:
+                    logger.warning(f"Monitoring failed: {e}")
+            
+            return result
             
         except Exception as e:
             logger.error(f"Medical RAG generation failed: {e}")
             # Fallback to standard RAG
             if enable_rag:
-                return self.rag_pipeline.generate(query=query, enable_rag=True, **kwargs)
-            else:
-                return {
-                    'answer': 'I apologize, but I encountered an error processing your request.',
-                    'context': '',
-                    'metadata': {'error': str(e)},
-                    'processing_time': time.time() - start_time
-                }
+                try:
+                    fallback_result = self.rag_pipeline.generate(
+                        query=query, 
+                        enable_rag=True,
+                        enable_evaluation=enable_evaluation,
+                        enable_monitoring=enable_monitoring
+                    )
+                    fallback_result["pipeline_type"] = "fallback_standard_rag"
+                    fallback_result["medical_error"] = str(e)
+                    return fallback_result
+                except Exception as fallback_error:
+                    logger.error(f"Fallback also failed: {fallback_error}")
+            
+            return {
+                "answer": "I apologize, but I encountered an error processing your request.",
+                "pipeline_type": "error",
+                "error": str(e),
+                "processing_time": time.time() - start_time
+            }
     
     def _merge_contexts(self, 
-                       original_query: str,
-                       rag_result: dict,
-                       medical_context: MedicalContext,
+                       medical_context: Optional[MedicalContext],
+                       rag_context: str,
                        medical_weight: float = 0.7) -> str:
         """
         Merge medical context with RAG context using weighted priority.
         
         Args:
-            original_query: Original user query
-            rag_result: Result from standard RAG pipeline
             medical_context: Medical knowledge context
+            rag_context: Context from standard RAG retrieval
             medical_weight: Priority weight for medical context (0.0-1.0)
             
         Returns:
@@ -501,13 +552,13 @@ class MedicalLLM_RAG:
         if medical_context and medical_context.umls_results:
             medical_text = self.medical_pipeline.format_medical_context(medical_context)
             if medical_text:
-                context_parts.append(f"[MEDICAL KNOWLEDGE] {medical_text}")
+                context_parts.append(f"MEDICAL KNOWLEDGE:\n{medical_text}")
         
-        # Add RAG context with lower priority
-        if rag_result and rag_result.get('context'):
-            context_parts.append(f"[DOCUMENT CONTEXT] {rag_result['context']}")
+        # Add RAG context
+        if rag_context and rag_context.strip():
+            context_parts.append(f"DOCUMENT CONTEXT:\n{rag_context}")
         
-        # If both contexts available, prioritize based on weight
+        # Prioritize based on weight
         if len(context_parts) == 2:
             if medical_weight > 0.5:
                 # Medical context first
@@ -518,46 +569,53 @@ class MedicalLLM_RAG:
         
         return "\n\n".join(context_parts)
     
-    def _create_enhanced_query(self, 
+    def _create_enhanced_prompt(self, 
                               original_query: str,
-                              rag_context: str,
-                              medical_context: MedicalContext) -> str:
+                              context: str,
+                              medical_context: Optional[MedicalContext]) -> str:
         """
-        Create an enhanced query that incorporates medical knowledge.
+        Create an enhanced prompt that incorporates medical knowledge.
         
         Args:
             original_query: Original user query
-            rag_context: Context from RAG retrieval
+            context: Merged context from medical and RAG sources
             medical_context: Medical knowledge context
             
         Returns:
-            Enhanced query string
+            Enhanced prompt string
         """
-        enhanced_parts = [f"Question: {original_query}"]
+        prompt_parts = []
         
-        # Add medical entities if available
-        if medical_context.medical_entities:
-            entities = [e.term for e in medical_context.medical_entities]
-            enhanced_parts.append(f"Medical entities identified: {', '.join(entities)}")
+        if context:
+            prompt_parts.append(f"Context Information:\n{context}")
         
-        # Add UMLS knowledge
-        if medical_context.umls_results:
-            umls_info = []
-            for result in medical_context.umls_results[:2]:  # Top 2 results
-                if result.relation_label and result.related_concept:
-                    umls_info.append(f"{result.name} {result.relation_label} {result.related_concept}")
-            
-            if umls_info:
-                enhanced_parts.append(f"Medical knowledge: {' | '.join(umls_info)}")
+        # Add medical entities information if available
+        if medical_context and medical_context.medical_terms:
+            medical_terms_str = ", ".join(medical_context.medical_terms)
+            prompt_parts.append(f"Medical Terms Identified: {medical_terms_str}")
         
-        # Add instruction for medical response
-        enhanced_parts.append(
-            "Please provide a comprehensive medical answer that integrates both "
-            "the medical knowledge above and any relevant document information. "
-            "Prioritize medical accuracy and cite sources when possible."
-        )
+        # Add final relations if available
+        if medical_context and medical_context.final_relations:
+            relations_str = []
+            for subject, relation, obj in medical_context.final_relations[:5]:  # Top 5 relations
+                relations_str.append(f"({subject}, {relation}, {obj})")
+            if relations_str:
+                prompt_parts.append(f"Medical Relations: {'; '.join(relations_str)}")
         
-        return "\n".join(enhanced_parts)
+        prompt_parts.append(f"Question: {original_query}")
+        
+        if medical_context and medical_context.umls_results:
+            prompt_parts.append(
+                "Please provide a comprehensive medical answer that integrates both "
+                "the medical knowledge and any relevant document information above. "
+                "Prioritize medical accuracy and be specific about medical terms and relationships."
+            )
+        else:
+            prompt_parts.append(
+                "Please provide a comprehensive answer based on the context information above."
+            )
+        
+        return "\n\n".join(prompt_parts)
     
     def get_medical_stats(self) -> dict:
         """Get medical pipeline statistics."""

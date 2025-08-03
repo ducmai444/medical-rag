@@ -51,14 +51,13 @@ def init_qdrant_collection(reset=True):
     collection_name = "vector_documents"
 
     try:
-        # Xóa collection cũ nếu tồn tại
         try:
             qdrant_client._instance.delete_collection(collection_name)
             logger.info(f"Deleted existing collection {collection_name}")
         except Exception as e:
             logger.info(f"Collection {collection_name} doesn't exist or couldn't be deleted: {str(e)}")
         
-        # Tạo collection mới với index
+        # Create new collection with index
         qdrant_client.create_vector_collection(collection_name)
         logger.info(f"Created new collection {collection_name} with vector size {settings.EMBEDDING_SIZE}")
     except UnexpectedResponse as e:
@@ -72,7 +71,7 @@ def init_qdrant_collection(reset=True):
         raise
 
 def initialize_session_state():
-    """Khởi tạo session state cho Streamlit."""
+    """Create new session state for Streamlit."""
     if 'session_id' not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
     
@@ -122,6 +121,11 @@ def main():
                 medical_priority = st.slider("Medical Knowledge Priority", 0.0, 1.0, 0.7, 0.1)
             
             max_umls_results = st.slider("Max UMLS Results", 1, 5, 3)
+            
+            # Advanced medical settings
+            with st.expander("🔧 Advanced Medical Settings"):
+                enable_caching = st.checkbox("Enable Redis Caching", value=False)
+                max_workers = st.slider("Max Workers", 1, 8, 4)
         
         # Session info for conversational models
         if model_type in ["Conversational RAG", "Medical RAG"]:
@@ -246,87 +250,80 @@ def main():
             with st.spinner("Processing your question..."):
                 try:
                     # Initialize model based on selection
-                    try:
-                        if model_type == "Medical RAG":
-                            if not umls_api_key:
-                                st.error("⚠️ UMLS API key is required for Medical RAG")
-                                st.stop()
-                            
-                            from inference_pipeline import MedicalLLM_RAG
-                            
-                            with st.spinner("🏥 Initializing Medical RAG..."):
-                                model = MedicalLLM_RAG(umls_api_key=umls_api_key)
-                            
-                            if not model.is_medical_enabled():
-                                st.warning("⚠️ Medical pipeline could not be fully initialized. Some features may be limited.")
-                            
-                            st.success("✅ Medical RAG initialized successfully!")
-                            
-                            # Show medical stats
-                            if st.session_state.get('show_session_stats', False):
-                                with st.expander("🏥 Medical Pipeline Status", expanded=True):
-                                    medical_stats = model.get_medical_stats()
-                                    st.json(medical_stats)
-                            
-                        elif model_type == "Conversational RAG":
-                            from inference_pipeline import ConversationalLLM_RAG
-                            
-                            with st.spinner("💬 Initializing Conversational RAG..."):
-                                model = ConversationalLLM_RAG()
-                            
-                            if not model.conversation_enabled:
-                                st.warning("⚠️ Conversation memory could not be initialized. Falling back to standard RAG.")
-                                fallback_reason = "Memory initialization failed"
-                            else:
-                                st.success("✅ Conversational RAG initialized successfully!")
-                            
-                            # Show session stats
-                            if st.session_state.get('show_session_stats', False):
-                                with st.expander("💬 Session Statistics", expanded=True):
-                                    if model.conversation_enabled:
-                                        stats = model.get_memory_stats()
-                                        st.json(stats)
-                                    else:
-                                        st.info("Session statistics not available (memory disabled)")
-                        
-                        else:  # Standard RAG
-                            from inference_pipeline import LLM_RAG
-                            
-                            with st.spinner("🔧 Initializing Standard RAG..."):
-                                model = LLM_RAG()
-                            
-                            st.success("✅ Standard RAG initialized successfully!")
-                    
-                    except Exception as e:
-                        st.error(f"❌ Failed to initialize {model_type}: {str(e)}")
-                        st.warning("🔄 Falling back to Standard RAG...")
-                        
-                        try:
-                            from inference_pipeline import LLM_RAG
-                            model = LLM_RAG()
-                            model_type = "Standard RAG"
-                            fallback_reason = f"Original model failed: {str(e)}"
-                            st.info(f"✅ Fallback successful: {fallback_reason}")
-                        except Exception as fallback_error:
-                            st.error(f"❌ Fallback also failed: {str(fallback_error)}")
+                    if model_type == "Medical RAG":
+                        if not umls_api_key:
+                            st.error("⚠️ UMLS API key is required for Medical RAG")
                             st.stop()
+                        
+                        from inference_pipeline import MedicalLLM_RAG
+                        
+                        with st.spinner("🏥 Initializing Medical RAG..."):
+                            model = MedicalLLM_RAG(
+                                umls_api_key=umls_api_key,
+                                enable_translation=enable_translation,
+                                enable_caching=enable_caching,
+                                max_workers=max_workers
+                            )
+                        
+                        if not model.is_medical_enabled():
+                            st.warning("⚠️ Medical pipeline could not be fully initialized. Some features may be limited.")
+                        
+                        st.success("✅ Medical RAG initialized successfully!")
+                        
+                        # Show medical stats
+                        if st.session_state.get('show_session_stats', False):
+                            with st.expander("🏥 Medical Pipeline Status", expanded=True):
+                                medical_stats = model.get_medical_stats()
+                                st.json(medical_stats)
 
+                    elif model_type == "Conversational RAG":
+                        from inference_pipeline import ConversationalLLM_RAG
+                        
+                        with st.spinner("💬 Initializing Conversational RAG..."):
+                            model = ConversationalLLM_RAG()
+                        
+                        if not model.conversation_enabled:
+                            st.warning("⚠️ Conversation memory could not be initialized. Falling back to standard RAG.")
+                            fallback_reason = "Memory initialization failed"
+                        else:
+                            st.success("✅ Conversational RAG initialized successfully!")
+                        
+                        # Show session stats
+                        if st.session_state.get('show_session_stats', False):
+                            with st.expander("💬 Session Statistics", expanded=True):
+                                if model.conversation_enabled:
+                                    stats = model.get_memory_stats()
+                                    st.json(stats)
+                                else:
+                                    st.info("Session statistics not available (memory disabled)")
+                    
+                    else:  # Standard RAG
+                        from inference_pipeline import LLM_RAG
+                        
+                        with st.spinner("🔧 Initializing Standard RAG..."):
+                            model = LLM_RAG()
+                        
+                        st.success("✅ Standard RAG initialized successfully!")
+                        
                     # Generate response based on model type
                     if model_type == "Medical RAG":
                         result = model.generate(
                             query=query,
                             enable_rag=enable_rag,
                             enable_medical=enable_umls,
-                            medical_priority_weight=medical_priority
+                            medical_priority_weight=medical_priority,
+                            enable_evaluation=enable_evaluation,
+                            enable_monitoring=enable_monitoring
                         )
                         
                         # Add to conversation history
                         st.session_state.conversation_history.append({
-                            "user": query,
-                            "assistant": result["answer"],
-                            "timestamp": datetime.now().isoformat(),
-                            "pipeline_type": result.get("pipeline_type", "medical_rag"),
-                            "medical_confidence": result.get("medical_confidence", 0.0)
+                            "role": "user",
+                            "content": query
+                        })
+                        st.session_state.conversation_history.append({
+                            "role": "assistant",
+                            "content": result["answer"]
                         })
                         
                     elif model_type == "Conversational RAG":
@@ -335,25 +332,39 @@ def main():
                             session_id=st.session_state.session_id,
                             user_id=st.session_state.user_id,
                             enable_rag=enable_rag,
-                            enable_conversation=True
+                            enable_conversation=enable_conversation,
+                            enable_evaluation=enable_evaluation,
+                            enable_monitoring=enable_monitoring
                         )
                         
                         # Update conversation history from model
                         if result.get("conversation_history"):
-                            st.session_state.conversation_history = result["conversation_history"]
+                            # Don't overwrite, just add current exchange
+                            st.session_state.conversation_history.append({
+                                "role": "user",
+                                "content": query
+                            })
+                            st.session_state.conversation_history.append({
+                                "role": "assistant",
+                                "content": result["answer"]
+                            })
                     
                     else:  # Standard RAG
                         result = model.generate(
                             query=query,
-                            enable_rag=enable_rag
+                            enable_rag=enable_rag,
+                            enable_evaluation=enable_evaluation,
+                            enable_monitoring=enable_monitoring
                         )
                         
                         # Add to conversation history for display
                         st.session_state.conversation_history.append({
-                            "user": query,
-                            "assistant": result["answer"],
-                            "timestamp": datetime.now().isoformat(),
-                            "pipeline_type": "standard_rag"
+                            "role": "user",
+                            "content": query
+                        })
+                        st.session_state.conversation_history.append({
+                            "role": "assistant",
+                            "content": result["answer"]
                         })
 
                     # Display results
@@ -365,29 +376,37 @@ def main():
                         with st.expander("🏥 Medical Information", expanded=False):
                             medical_meta = result["medical_metadata"]
                             
-                            # Medical entities
-                            if medical_meta.get("medical_entities"):
-                                st.write("**Medical Entities Detected:**")
-                                for entity in medical_meta["medical_entities"]:
-                                    st.write(f"- **{entity['term']}** (Confidence: {entity['confidence']:.2f})")
-                                    if entity.get("cui"):
-                                        st.write(f"  - CUI: {entity['cui']}")
-                                    if entity.get("name"):
-                                        st.write(f"  - Name: {entity['name']}")
+                            # Medical terms detected
+                            if medical_meta.get("medical_terms"):
+                                st.write("**Medical Terms Detected:**")
+                                for term in medical_meta["medical_terms"]:
+                                    st.write(f"- {term}")
                             
-                            # UMLS results
-                            if medical_meta.get("umls_results"):
-                                st.write("**UMLS Knowledge:**")
-                                for i, umls_result in enumerate(medical_meta["umls_results"], 1):
-                                    st.write(f"{i}. **{umls_result['name']}** {umls_result['relation']} **{umls_result['related_concept']}**")
-                                    st.write(f"   - Score: {umls_result['score']:.3f}")
+                            # UMLS terms information
+                            if medical_meta.get("umls_terms"):
+                                st.write("**UMLS Knowledge Base Results:**")
+                                for i, umls_term in enumerate(medical_meta["umls_terms"], 1):
+                                    with st.container():
+                                        st.write(f"**{i}. {umls_term['name']}** (CUI: {umls_term['cui']})")
+                                        if umls_term.get("definition"):
+                                            st.write(f"   - Definition: {umls_term['definition']}")
+                                        st.write(f"   - Relations found: {umls_term['relations_count']}")
+                                        st.write(f"   - Ranked relations: {umls_term['ranked_relations_count']}")
                             
-                            # Processing info
+                            # Final relations (medical knowledge graph)
+                            if medical_meta.get("final_relations"):
+                                st.write("**Medical Knowledge Relations:**")
+                                for i, relation in enumerate(medical_meta["final_relations"][:10], 1):  # Top 10
+                                    st.write(f"{i}. **{relation['subject']}** → _{relation['relation']}_ → **{relation['object']}**")
+                            
+                            # Processing metrics
                             col1, col2, col3 = st.columns(3)
                             with col1:
-                                st.metric("Medical Confidence", f"{medical_meta['confidence_score']:.2f}")
+                                confidence = medical_meta.get("confidence_score", 0)
+                                st.metric("Medical Confidence", f"{confidence:.2f}")
                             with col2:
-                                st.metric("Processing Time", f"{medical_meta['processing_time']:.2f}s")
+                                processing_time = medical_meta.get("processing_time", 0)
+                                st.metric("Processing Time", f"{processing_time:.2f}s")
                             with col3:
                                 translation_status = "Yes" if medical_meta.get("translation_used") else "No"
                                 st.metric("Translation Used", translation_status)
@@ -395,12 +414,14 @@ def main():
                     # Conversation context (for Conversational RAG)
                     if model_type == "Conversational RAG" and result.get("conversation_history"):
                         with st.expander("💬 Conversation Context", expanded=False):
-                            st.write("**Recent History:**")
-                            recent_history = result.get("conversation_history", [])
-                            for msg in recent_history[-3:]:  # Show last 3 exchanges
-                                st.write(f"**User:** {msg['user']}")
-                                st.write(f"**Assistant:** {msg['assistant']}")
-                                st.write("---")
+                            st.write("**Session Context Used:**")
+                            if result.get("context_metadata"):
+                                context_meta = result["context_metadata"]
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.metric("Short-term Messages", context_meta.get("short_term_messages", 0))
+                                with col2:
+                                    st.metric("Long-term Messages", context_meta.get("long_term_messages", 0))
                             
                             if result.get("relevant_background"):
                                 st.write("**Relevant Background:**")
@@ -418,8 +439,16 @@ def main():
                             metadata_to_show.update({
                                 "Medical Query": result.get("is_medical_query", False),
                                 "Medical Confidence": f"{result.get('medical_confidence', 0):.2f}",
-                                "UMLS Results": len(result.get("medical_metadata", {}).get("umls_results", []))
+                                "Translation Used": result.get("translation_used", False)
                             })
+                            
+                            if result.get("medical_metadata"):
+                                umls_count = len(result["medical_metadata"].get("umls_terms", []))
+                                relations_count = len(result["medical_metadata"].get("final_relations", []))
+                                metadata_to_show.update({
+                                    "UMLS Terms": umls_count,
+                                    "Medical Relations": relations_count
+                                })
                         
                         if model_type == "Conversational RAG":
                             metadata_to_show.update({
@@ -428,41 +457,6 @@ def main():
                             })
                         
                         st.json(metadata_to_show)
-                    
-                    # Add to conversation history
-                    st.session_state.conversation_history.append({
-                        "role": "user",
-                        "content": query
-                    })
-                    st.session_state.conversation_history.append({
-                        "role": "assistant", 
-                        "content": result["answer"]
-                    })
-                    
-                    # Display additional information in expandable sections
-                    col1, col2 = st.columns(2)
-                    
-                    with col1:
-                        if result.get("conversation_enabled"):
-                            with st.expander("💭 Conversation Context"):
-                                if result.get("conversation_history"):
-                                    st.text("Recent Conversation:")
-                                    st.text(result["conversation_history"])
-                                
-                                if result.get("relevant_background"):
-                                    st.text("Relevant Background:")
-                                    st.text(result["relevant_background"])
-                    
-                    with col2:
-                        with st.expander("📊 Metadata"):
-                            metadata = result.get("context_metadata", {})
-                            st.json({
-                                "session_id": result.get("session_id", "N/A"),
-                                "conversation_enabled": result.get("conversation_enabled", False),
-                                "short_term_messages": metadata.get("short_term_messages", 0),
-                                "long_term_messages": metadata.get("long_term_messages", 0),
-                                "context_length": metadata.get("context_length", 0)
-                            })
                     
                     # Display evaluation results if available
                     if result.get("llm_evaluation_result"):
@@ -475,9 +469,29 @@ def main():
                         if result.get("fallback_used"):
                             st.info("ℹ️ Fallback to standard RAG was used.")
                     
+                    if result.get("medical_error"):
+                        st.warning(f"⚠️ Medical Processing Error: {result['medical_error']}")
+                        st.info("ℹ️ Fallback to standard RAG was used.")
+                    
                 except Exception as e:
                     st.error(f"❌ Error processing query: {str(e)}")
                     logger.error(f"Error in main app: {e}")
+                    
+                    # Try fallback to standard RAG
+                    try:
+                        from inference_pipeline import LLM_RAG
+                        fallback_model = LLM_RAG()
+                        fallback_result = fallback_model.generate(
+                            query=query,
+                            enable_rag=enable_rag,
+                            enable_evaluation=False,
+                            enable_monitoring=False
+                        )
+                        st.info("🔄 Fallback to Standard RAG was successful")
+                        st.markdown("### 🤖 Assistant Response (Fallback)")
+                        st.markdown(fallback_result["answer"])
+                    except Exception as fallback_error:
+                        st.error(f"❌ Fallback also failed: {str(fallback_error)}")
         else:
             st.warning("⚠️ Please enter a question.")
 
@@ -486,20 +500,20 @@ def main():
         st.divider()
         st.subheader("🔧 Advanced Features")
         
-        if st.session_state.use_conversation:
+        if model_type == "Conversational RAG" and st.session_state.use_conversation:
             try:
-                model = ConversationalLLM_RAG()
+                conv_model = ConversationalLLM_RAG()
                 
                 if st.button("📊 Memory Stats"):
-                    stats = model.get_memory_stats()
+                    stats = conv_model.get_memory_stats()
                     st.json(stats)
                 
                 if st.button("👤 User Profile"):
-                    profile = model.get_user_profile(st.session_state.user_id)
+                    profile = conv_model.get_user_profile(st.session_state.user_id)
                     st.json(profile)
                 
                 if st.button("🗑️ Clear Session"):
-                    model.clear_session(st.session_state.session_id)
+                    conv_model.clear_session(st.session_state.session_id)
                     st.session_state.conversation_history = []
                     st.success("Session cleared!")
                     st.rerun()
